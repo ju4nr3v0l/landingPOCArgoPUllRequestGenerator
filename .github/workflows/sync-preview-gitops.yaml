@@ -1,0 +1,176 @@
+name: Sync Preview GitOps
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
+      - closed
+
+permissions:
+  contents: read
+
+jobs:
+  sync-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout landing repo
+        uses: actions/checkout@v4
+
+      - name: Checkout infra repo
+        uses: actions/checkout@v4
+        with:
+          repository: ju4nr3v0l/InfraPOCArgoPUllRequestGenerator
+          token: ${{ secrets.INFRA_REPO_TOKEN }}
+          path: _infra
+
+      - name: Render preview manifests in infra repo
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_ACTION: ${{ github.event.action }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HAS_PREVIEW_LABEL: ${{ contains(join(github.event.pull_request.labels.*.name, ','), 'preview') }}
+          PREVIEW_AZURE_CLIENT_ID: ${{ vars.PREVIEW_AZURE_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+
+          PREVIEW_ID="pr-${PR_NUMBER}"
+          TARGET_DIR="_infra/generated/previews/${PREVIEW_ID}"
+          BRANCH_SLUG="$(echo "${HEAD_REF}" | tr '/_' '-' | tr -cd '[:alnum:]-')"
+
+          if [[ "${PR_ACTION}" == "closed" || "${HAS_PREVIEW_LABEL}" != "true" ]]; then
+            rm -rf "${TARGET_DIR}"
+            exit 0
+          fi
+
+          mkdir -p "${TARGET_DIR}/site"
+
+          cp site/index.html "${TARGET_DIR}/site/index.html"
+          cp site/style.css "${TARGET_DIR}/site/style.css"
+
+          cat > "${TARGET_DIR}/deployment.yaml" <<'EOF'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: landingpage
+            labels:
+              app: landingpage
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: landingpage
+            template:
+              metadata:
+                labels:
+                  app: landingpage
+              spec:
+                serviceAccountName: landing-preview
+                containers:
+                  - name: nginx
+                    image: nginx:1.27-alpine
+                    ports:
+                      - containerPort: 80
+                    volumeMounts:
+                      - name: content
+                        mountPath: /usr/share/nginx/html
+                        readOnly: true
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: 80
+                      initialDelaySeconds: 3
+                      periodSeconds: 10
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: 80
+                      initialDelaySeconds: 10
+                      periodSeconds: 20
+                volumes:
+                  - name: content
+                    configMap:
+                      name: landingpage-content
+          EOF
+
+          cat > "${TARGET_DIR}/service.yaml" <<'EOF'
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: landingpage
+            labels:
+              app: landingpage
+          spec:
+            selector:
+              app: landingpage
+            ports:
+              - name: http
+                port: 80
+                targetPort: 80
+          EOF
+
+          if [[ -n "${PREVIEW_AZURE_CLIENT_ID}" ]]; then
+            cat > "${TARGET_DIR}/serviceaccount.yaml" <<EOF
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: landing-preview
+            annotations:
+              azure.workload.identity/client-id: "${PREVIEW_AZURE_CLIENT_ID}"
+          EOF
+          else
+            cat > "${TARGET_DIR}/serviceaccount.yaml" <<'EOF'
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: landing-preview
+            annotations:
+              preview.argocd.io/service-account-example: "true"
+          EOF
+          fi
+
+          cat > "${TARGET_DIR}/kustomization.yaml" <<EOF
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          namespace: preview-${PREVIEW_ID}
+
+          resources:
+            - deployment.yaml
+            - service.yaml
+            - serviceaccount.yaml
+
+          configMapGenerator:
+            - name: landingpage-content
+              files:
+                - site/index.html
+                - site/style.css
+
+          commonLabels:
+            preview.argocd.io/pr-number: "${PR_NUMBER}"
+            preview.argocd.io/branch: "${BRANCH_SLUG}"
+            preview.argocd.io/head-sha: "${HEAD_SHA}"
+
+          nameSuffix: "-${PREVIEW_ID}"
+
+          generatorOptions:
+            disableNameSuffixHash: true
+          EOF
+
+      - name: Commit and push infra changes
+        working-directory: _infra
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if [[ -z "$(git status --porcelain)" ]]; then
+            exit 0
+          fi
+
+          git add generated/previews
+          git commit -m "Sync preview manifests for PR #${{ github.event.pull_request.number }}"
+          git push origin main
