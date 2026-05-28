@@ -111,7 +111,7 @@ jobs:
                 - site/index.html
                 - site/style.css
 
-          commonLabels:
+          commonAnnotations:
             release.argocd.io/source-sha: "${HEAD_SHA}"
 
           generatorOptions:
