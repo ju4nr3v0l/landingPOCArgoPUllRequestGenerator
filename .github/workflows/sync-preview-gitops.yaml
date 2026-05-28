@@ -24,7 +24,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ju4nr3v0l/InfraPOCArgoPUllRequestGenerator
-          token: ${{ secrets.INFRA_REPO_TOKEN }}
+          token: ${{ github.token }}
+          persist-credentials: false
           path: _infra
 
       - name: Render preview manifests in infra repo
@@ -162,10 +163,19 @@ jobs:
 
       - name: Commit and push infra changes
         working-directory: _infra
+        env:
+          INFRA_REPO_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
         run: |
           set -euo pipefail
+
+          if [[ -z "${INFRA_REPO_TOKEN}" ]]; then
+            echo "::error title=Missing INFRA_REPO_TOKEN::Create the INFRA_REPO_TOKEN secret in the landing repository with write access to InfraPOCArgoPUllRequestGenerator."
+            exit 1
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${INFRA_REPO_TOKEN}@github.com/ju4nr3v0l/InfraPOCArgoPUllRequestGenerator.git"
 
           if [[ -z "$(git status --porcelain)" ]]; then
             exit 0
