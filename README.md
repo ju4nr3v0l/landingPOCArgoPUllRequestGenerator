@@ -47,11 +47,48 @@ Su responsabilidad es:
 
 - `INFRA_REPO_TOKEN`
   - token con permiso de escritura sobre `InfraPOCArgoPUllRequestGenerator`
+  - ubicacion exacta: `landing repo > Settings > Secrets and variables > Actions > Repository secrets`
+  - uso: el workflow lo usa solo para hacer `push` al repo `infra`
 
 ### Variable opcional
 
 - `PREVIEW_AZURE_CLIENT_ID`
   - si se define, el workflow agrega la anotacion de Azure Workload Identity al `ServiceAccount` generado para previews
+  - ubicacion exacta: `landing repo > Settings > Secrets and variables > Actions > Variables`
+
+## Workflows
+
+### `sync-prod-gitops.yaml`
+
+- se ejecuta en cada `push` a `main`
+- renderiza `infra/generated/environments/prod/landing`
+- hace commit al repo `infra`
+- Argo CD sincroniza `landing-prod`
+
+### `sync-preview-gitops.yaml`
+
+- se ejecuta en eventos de `pull_request`
+- si el PR tiene label `preview`, genera `infra/generated/previews/pr-<numero>`
+- si el PR se cierra o pierde el label `preview`, elimina esa carpeta
+- Argo CD crea o destruye el ambiente efimero en funcion del estado de Git
+
+## Troubleshooting rapido
+
+### Error: `Input required and not supplied: token`
+
+Ese error corresponde a una version vieja del workflow.
+
+Valida que `main` del repo `landing` ya tenga el commit con el fix del workflow y vuelve a ejecutar el job.
+
+### Error: `Missing INFRA_REPO_TOKEN`
+
+Debes crear el secret:
+
+- `INFRA_REPO_TOKEN`
+
+en:
+
+- `landing repo > Settings > Secrets and variables > Actions > Repository secrets`
 
 ## Archivo principal para cambiar la landing
 
