@@ -233,8 +233,6 @@ jobs:
             preview.argocd.io/branch: "${BRANCH_SLUG}"
             preview.argocd.io/head-sha: "${HEAD_SHA}"
             preview.argocd.io/image-digest: "${IMAGE_DIGEST}"
-
-          nameSuffix: "-${PREVIEW_ID}"
           EOF
 
       - name: Commit and push infra changes
