@@ -13,6 +13,9 @@ on:
 permissions:
   contents: read
 
+env:
+  IMAGE_REPOSITORY: juanmarulanda/landingpocargoprpreview
+
 jobs:
   sync-preview:
     runs-on: ubuntu-latest
@@ -28,30 +31,88 @@ jobs:
           persist-credentials: false
           path: _infra
 
+      - name: Resolve preview metadata
+        id: preview_meta
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_ACTION: ${{ github.event.action }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HAS_PREVIEW_LABEL: ${{ contains(join(github.event.pull_request.labels.*.name, ','), 'preview') }}
+        run: |
+          set -euo pipefail
+
+          PREVIEW_ID="pr-${PR_NUMBER}"
+          BRANCH_SLUG="$(echo "${HEAD_REF}" | tr '/_' '-' | tr -cd '[:alnum:]-')"
+          SHOULD_RENDER="false"
+
+          if [[ "${PR_ACTION}" != "closed" && "${HAS_PREVIEW_LABEL}" == "true" ]]; then
+            SHOULD_RENDER="true"
+          fi
+
+          {
+            echo "preview_id=${PREVIEW_ID}"
+            echo "branch_slug=${BRANCH_SLUG}"
+            echo "should_render=${SHOULD_RENDER}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        if: steps.preview_meta.outputs.should_render == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Docker Hub secrets
+        if: steps.preview_meta.outputs.should_render == 'true'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DOCKERHUB_USERNAME}" || -z "${DOCKERHUB_TOKEN}" ]]; then
+            echo "::error title=Missing Docker Hub secrets::Create DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the landing repository Actions secrets."
+            exit 1
+          fi
+
+      - name: Login to Docker Hub
+        if: steps.preview_meta.outputs.should_render == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push preview image
+        if: steps.preview_meta.outputs.should_render == 'true'
+        id: build_preview_image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_REPOSITORY }}:${{ steps.preview_meta.outputs.preview_id }}-${{ github.event.pull_request.head.sha }}
+            ${{ env.IMAGE_REPOSITORY }}:${{ steps.preview_meta.outputs.preview_id }}-latest
+
       - name: Render preview manifests in infra repo
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_ACTION: ${{ github.event.action }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          HAS_PREVIEW_LABEL: ${{ contains(join(github.event.pull_request.labels.*.name, ','), 'preview') }}
           PREVIEW_AZURE_CLIENT_ID: ${{ vars.PREVIEW_AZURE_CLIENT_ID }}
+          SHOULD_RENDER: ${{ steps.preview_meta.outputs.should_render }}
+          PREVIEW_ID: ${{ steps.preview_meta.outputs.preview_id }}
+          BRANCH_SLUG: ${{ steps.preview_meta.outputs.branch_slug }}
+          IMAGE_DIGEST: ${{ steps.build_preview_image.outputs.digest }}
+          IMAGE_REPOSITORY: ${{ env.IMAGE_REPOSITORY }}
         run: |
           set -euo pipefail
 
-          PREVIEW_ID="pr-${PR_NUMBER}"
           TARGET_DIR="_infra/generated/previews/${PREVIEW_ID}"
-          BRANCH_SLUG="$(echo "${HEAD_REF}" | tr '/_' '-' | tr -cd '[:alnum:]-')"
 
-          if [[ "${PR_ACTION}" == "closed" || "${HAS_PREVIEW_LABEL}" != "true" ]]; then
+          if [[ "${SHOULD_RENDER}" != "true" ]]; then
             rm -rf "${TARGET_DIR}"
             exit 0
           fi
 
-          mkdir -p "${TARGET_DIR}/site"
-
-          cp site/index.html "${TARGET_DIR}/site/index.html"
-          cp site/style.css "${TARGET_DIR}/site/style.css"
+          mkdir -p "${TARGET_DIR}"
 
           cat > "${TARGET_DIR}/deployment.yaml" <<'EOF'
           apiVersion: apps/v1
@@ -72,14 +133,10 @@ jobs:
               spec:
                 serviceAccountName: landing-preview
                 containers:
-                  - name: nginx
-                    image: nginx:1.27-alpine
+                  - name: landing
+                    image: IMAGE_PLACEHOLDER
                     ports:
                       - containerPort: 80
-                    volumeMounts:
-                      - name: content
-                        mountPath: /usr/share/nginx/html
-                        readOnly: true
                     readinessProbe:
                       httpGet:
                         path: /
@@ -92,11 +149,10 @@ jobs:
                         port: 80
                       initialDelaySeconds: 10
                       periodSeconds: 20
-                volumes:
-                  - name: content
-                    configMap:
-                      name: landingpage-content
           EOF
+
+          sed -i.bak "s|IMAGE_PLACEHOLDER|${IMAGE_REPOSITORY}@${IMAGE_DIGEST}|g" "${TARGET_DIR}/deployment.yaml"
+          rm "${TARGET_DIR}/deployment.yaml.bak"
 
           cat > "${TARGET_DIR}/service.yaml" <<'EOF'
           apiVersion: v1
@@ -144,21 +200,13 @@ jobs:
             - service.yaml
             - serviceaccount.yaml
 
-          configMapGenerator:
-            - name: landingpage-content
-              files:
-                - site/index.html
-                - site/style.css
-
-          commonLabels:
+          commonAnnotations:
             preview.argocd.io/pr-number: "${PR_NUMBER}"
             preview.argocd.io/branch: "${BRANCH_SLUG}"
             preview.argocd.io/head-sha: "${HEAD_SHA}"
+            preview.argocd.io/image-digest: "${IMAGE_DIGEST}"
 
           nameSuffix: "-${PREVIEW_ID}"
-
-          generatorOptions:
-            disableNameSuffixHash: true
           EOF
 
       - name: Commit and push infra changes

@@ -7,6 +7,7 @@ En esta version del flujo, este repo ya no es la fuente GitOps consumida por Arg
 Su responsabilidad es:
 
 - almacenar el codigo fuente de la landing
+- construir una imagen OCI versionada en Docker Hub
 - disparar GitHub Actions al abrir, actualizar o cerrar PRs
 - permitir que GitHub Actions escriba metadata y manifests generados en el repo `infra`
 
@@ -18,6 +19,8 @@ Su responsabilidad es:
 │   └── workflows
 │       ├── sync-preview-gitops.yaml
 │       └── sync-prod-gitops.yaml
+├── .dockerignore
+├── Dockerfile
 ├── README.md
 └── site
     ├── index.html
@@ -29,17 +32,19 @@ Su responsabilidad es:
 ### Ambiente estable
 
 1. se hace merge a `main`
-2. GitHub Actions genera o actualiza `infra/generated/environments/prod/landing`
-3. Argo CD detecta cambios en el repo `infra`
-4. se sincroniza `landing-prod`
+2. GitHub Actions construye y publica una imagen en Docker Hub
+3. GitHub Actions genera o actualiza `infra/generated/environments/prod/landing` con la referencia de imagen por digest
+4. Argo CD detecta cambios en el repo `infra`
+5. se sincroniza `landing-prod`
 
 ### Ambiente efimero
 
 1. se abre o actualiza un PR
-2. si el PR tiene el label `preview`, GitHub Actions genera `infra/generated/previews/pr-<numero>`
-3. Argo CD detecta esa carpeta por Git generator
-4. crea una `Application` y un namespace efimero
-5. al cerrar o mergear el PR, GitHub Actions elimina esa carpeta y Argo hace `prune`
+2. si el PR tiene el label `preview`, GitHub Actions construye y publica una imagen del PR
+3. GitHub Actions genera `infra/generated/previews/pr-<numero>` con la referencia de imagen por digest
+4. Argo CD detecta esa carpeta por Git generator
+5. crea una `Application` y un namespace efimero
+6. al cerrar o mergear el PR, GitHub Actions elimina esa carpeta y Argo hace `prune`
 
 ## Secrets y variables que necesita GitHub Actions
 
@@ -49,6 +54,14 @@ Su responsabilidad es:
   - token con permiso de escritura sobre `InfraPOCArgoPUllRequestGenerator`
   - ubicacion exacta: `landing repo > Settings > Secrets and variables > Actions > Repository secrets`
   - uso: el workflow lo usa solo para hacer `push` al repo `infra`
+
+- `DOCKERHUB_USERNAME`
+  - usuario de Docker Hub con permiso para publicar en `juanmarulanda/landingpocargoprpreview`
+  - ubicacion exacta: `landing repo > Settings > Secrets and variables > Actions > Repository secrets`
+
+- `DOCKERHUB_TOKEN`
+  - access token o password de Docker Hub con permiso para publicar en `juanmarulanda/landingpocargoprpreview`
+  - ubicacion exacta: `landing repo > Settings > Secrets and variables > Actions > Repository secrets`
 
 ### Variable opcional
 
@@ -61,6 +74,7 @@ Su responsabilidad es:
 ### `sync-prod-gitops.yaml`
 
 - se ejecuta en cada `push` a `main`
+- construye la imagen de la landing
 - renderiza `infra/generated/environments/prod/landing`
 - hace commit al repo `infra`
 - Argo CD sincroniza `landing-prod`
@@ -68,6 +82,7 @@ Su responsabilidad es:
 ### `sync-preview-gitops.yaml`
 
 - se ejecuta en eventos de `pull_request`
+- si el PR tiene label `preview`, construye y publica una imagen del PR
 - si el PR tiene label `preview`, genera `infra/generated/previews/pr-<numero>`
 - si el PR se cierra o pierde el label `preview`, elimina esa carpeta
 - Argo CD crea o destruye el ambiente efimero en funcion del estado de Git
@@ -98,5 +113,6 @@ en:
 ## Notas
 
 - este repo queda limpio de manifests Kubernetes
+- la entrega hacia Argo CD ocurre por imagen OCI, no copiando `html` o `css` a `infra`
 - todo lo derivado por ambiente se publica en `infra/generated/...`
 - el repo `infra` se convierte en la unica fuente GitOps que Argo CD sincroniza
