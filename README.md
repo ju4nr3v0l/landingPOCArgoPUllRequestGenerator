@@ -89,6 +89,47 @@ Su responsabilidad es:
 - si el PR se cierra o pierde el label `preview`, elimina esa carpeta
 - Argo CD crea o destruye el ambiente efimero en funcion del estado de Git
 
+## Como visualizar la landing
+
+### Prod
+
+Ejecuta:
+
+```bash
+kubectl port-forward -n landing-prod svc/landingpage 8081:80
+```
+
+Luego abre:
+
+- [http://localhost:8081](http://localhost:8081)
+
+### Preview por PR
+
+Cuando exista un preview para un PR, el namespace seguira este patron:
+
+- `preview-pr-<numero>`
+
+Y el servicio seguira este patron:
+
+- `landingpage-pr-<numero>`
+
+Ejemplo para el PR 7:
+
+```bash
+kubectl port-forward -n preview-pr-7 svc/landingpage-pr-7 8082:80
+```
+
+Luego abre:
+
+- [http://localhost:8082](http://localhost:8082)
+
+Si no recuerdas el numero del PR o quieres confirmar que el preview ya existe:
+
+```bash
+kubectl get applications -n argocd
+kubectl get svc -n preview-pr-<numero>
+```
+
 ## Troubleshooting rapido
 
 ### Error: `Input required and not supplied: token`
@@ -106,6 +147,26 @@ Debes crear el secret:
 en:
 
 - `landing repo > Settings > Secrets and variables > Actions > Repository secrets`
+
+### Error: `Missing Docker Hub secrets`
+
+Debes crear estos secrets en el repo `landing`:
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+
+Ubicacion:
+
+- `landing repo > Settings > Secrets and variables > Actions > Repository secrets`
+
+### Error en Kubernetes: `no match for platform in manifest`
+
+Ese error indica que la imagen publicada no incluia la arquitectura del nodo del cluster.
+
+La configuracion actual ya construye imagenes multi-arquitectura:
+
+- `linux/amd64`
+- `linux/arm64`
 
 ## Archivo principal para cambiar la landing
 
