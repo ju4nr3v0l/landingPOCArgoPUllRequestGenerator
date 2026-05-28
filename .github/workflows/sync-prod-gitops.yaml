@@ -189,4 +189,5 @@ jobs:
 
           git add generated/environments/prod/landing
           git commit -m "Sync prod manifests from landing@${{ github.sha }}"
+          git pull --rebase origin main
           git push origin main
