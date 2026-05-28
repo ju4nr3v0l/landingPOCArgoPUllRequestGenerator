@@ -257,4 +257,5 @@ jobs:
 
           git add generated/previews
           git commit -m "Sync preview manifests for PR #${{ github.event.pull_request.number }}"
+          git pull --rebase origin main
           git push origin main
