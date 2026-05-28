@@ -119,9 +119,9 @@ jobs:
 
           mkdir -p "${TARGET_DIR}"
 
-          cat > "${TARGET_DIR}/deployment.yaml" <<'EOF'
-          apiVersion: apps/v1
-          kind: Deployment
+          cat > "${TARGET_DIR}/rollout.yaml" <<'EOF'
+          apiVersion: argoproj.io/v1alpha1
+          kind: Rollout
           metadata:
             name: landingpage
             labels:
@@ -131,6 +131,12 @@ jobs:
             selector:
               matchLabels:
                 app: landingpage
+            strategy:
+              blueGreen:
+                activeService: landingpage-active
+                previewService: landingpage-preview
+                autoPromotionEnabled: false
+                scaleDownDelaySeconds: 30
             template:
               metadata:
                 labels:
@@ -156,14 +162,30 @@ jobs:
                       periodSeconds: 20
           EOF
 
-          sed -i.bak "s|IMAGE_PLACEHOLDER|${IMAGE_REPOSITORY}@${IMAGE_DIGEST}|g" "${TARGET_DIR}/deployment.yaml"
-          rm "${TARGET_DIR}/deployment.yaml.bak"
+          sed -i.bak "s|IMAGE_PLACEHOLDER|${IMAGE_REPOSITORY}@${IMAGE_DIGEST}|g" "${TARGET_DIR}/rollout.yaml"
+          rm "${TARGET_DIR}/rollout.yaml.bak"
 
-          cat > "${TARGET_DIR}/service.yaml" <<'EOF'
+          cat > "${TARGET_DIR}/service-active.yaml" <<'EOF'
           apiVersion: v1
           kind: Service
           metadata:
-            name: landingpage
+            name: landingpage-active
+            labels:
+              app: landingpage
+          spec:
+            selector:
+              app: landingpage
+            ports:
+              - name: http
+                port: 80
+                targetPort: 80
+          EOF
+
+          cat > "${TARGET_DIR}/service-preview.yaml" <<'EOF'
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: landingpage-preview
             labels:
               app: landingpage
           spec:
@@ -201,8 +223,9 @@ jobs:
           namespace: preview-${PREVIEW_ID}
 
           resources:
-            - deployment.yaml
-            - service.yaml
+            - rollout.yaml
+            - service-active.yaml
+            - service-preview.yaml
             - serviceaccount.yaml
 
           commonAnnotations:

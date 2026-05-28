@@ -10,6 +10,7 @@ Su responsabilidad es:
 - construir una imagen OCI versionada en Docker Hub
 - disparar GitHub Actions al abrir, actualizar o cerrar PRs
 - permitir que GitHub Actions escriba metadata y manifests generados en el repo `infra`
+- alimentar despliegues BlueGreen administrados por Argo Rollouts
 
 ## Estructura
 
@@ -35,7 +36,8 @@ Su responsabilidad es:
 2. GitHub Actions construye y publica una imagen en Docker Hub
 3. GitHub Actions genera o actualiza `infra/generated/environments/prod/landing` con la referencia de imagen por digest
 4. Argo CD detecta cambios en el repo `infra`
-5. se sincroniza `landing-prod`
+5. Argo Rollouts crea una nueva revision BlueGreen
+6. la nueva revision queda accesible por el servicio `preview` hasta que se promueva manualmente
 
 ### Ambiente efimero
 
@@ -43,8 +45,9 @@ Su responsabilidad es:
 2. si el PR tiene el label `preview`, GitHub Actions construye y publica una imagen del PR
 3. GitHub Actions genera `infra/generated/previews/pr-<numero>` con la referencia de imagen por digest
 4. Argo CD detecta esa carpeta por Git generator
-5. crea una `Application` y un namespace efimero
-6. al cerrar o mergear el PR, GitHub Actions elimina esa carpeta y Argo hace `prune`
+5. Argo Rollouts crea una revision BlueGreen dentro del namespace efimero
+6. el servicio `preview` permite inspeccionar la nueva revision antes de promoverla
+7. al cerrar o mergear el PR, GitHub Actions elimina esa carpeta y Argo hace `prune`
 
 ## Secrets y variables que necesita GitHub Actions
 
@@ -79,6 +82,7 @@ Su responsabilidad es:
 - renderiza `infra/generated/environments/prod/landing`
 - hace commit al repo `infra`
 - Argo CD sincroniza `landing-prod`
+- Argo Rollouts expone la nueva version por `landingpage-preview` y espera promocion manual
 
 ### `sync-preview-gitops.yaml`
 
@@ -88,40 +92,94 @@ Su responsabilidad es:
 - si el PR tiene label `preview`, genera `infra/generated/previews/pr-<numero>`
 - si el PR se cierra o pierde el label `preview`, elimina esa carpeta
 - Argo CD crea o destruye el ambiente efimero en funcion del estado de Git
+- Argo Rollouts usa BlueGreen tambien dentro de cada namespace efimero
 
 ## Como visualizar la landing
 
-### Prod
+### Prod estable
 
 Ejecuta:
 
 ```bash
-kubectl port-forward -n landing-prod svc/landingpage 8081:80
+kubectl port-forward -n landing-prod svc/landingpage-active 8081:80
 ```
 
 Luego abre:
 
 - [http://localhost:8081](http://localhost:8081)
 
-### Preview por PR
+### Prod preview
 
-Cuando exista un preview para un PR, el namespace seguira este patron:
-
-- `preview-pr-<numero>`
-
-Y el servicio seguira este patron:
-
-- `landingpage-pr-<numero>`
-
-Ejemplo para el PR 7:
+Para ver la nueva revision antes de promoverla:
 
 ```bash
-kubectl port-forward -n preview-pr-7 svc/landingpage-pr-7 8082:80
+kubectl port-forward -n landing-prod svc/landingpage-preview 8082:80
 ```
 
 Luego abre:
 
 - [http://localhost:8082](http://localhost:8082)
+
+### Preview por PR estable
+
+Cuando exista un preview para un PR, el namespace seguira este patron:
+
+- `preview-pr-<numero>`
+
+El servicio estable dentro de ese namespace sera:
+
+- `landingpage-active`
+
+Ejemplo para el PR 7:
+
+```bash
+kubectl port-forward -n preview-pr-7 svc/landingpage-active 8083:80
+```
+
+Luego abre:
+
+- [http://localhost:8083](http://localhost:8083)
+
+### Preview por PR candidato
+
+Para ver la nueva revision del PR antes de promoverla:
+
+```bash
+kubectl port-forward -n preview-pr-7 svc/landingpage-preview 8084:80
+```
+
+Luego abre:
+
+- [http://localhost:8084](http://localhost:8084)
+
+### Promover una nueva revision BlueGreen
+
+Requiere tener instalado `kubectl-argo-rollouts`.
+
+Prod:
+
+```bash
+kubectl argo rollouts promote landingpage -n landing-prod
+```
+
+PR 7:
+
+```bash
+kubectl argo rollouts promote landingpage -n preview-pr-7
+```
+
+### Estado del rollout
+
+```bash
+kubectl argo rollouts get rollout landingpage -n landing-prod
+kubectl argo rollouts get rollout landingpage -n preview-pr-7
+```
+
+### Descubrir previews activos
+
+Cuando exista un preview para un PR, el namespace seguira este patron:
+
+- `preview-pr-<numero>`
 
 Si no recuerdas el numero del PR o quieres confirmar que el preview ya existe:
 
@@ -168,6 +226,20 @@ La configuracion actual ya construye imagenes multi-arquitectura:
 - `linux/amd64`
 - `linux/arm64`
 
+### El rollout queda pausado esperando promocion
+
+Eso es esperado.
+
+La estrategia BlueGreen actual usa:
+
+- `autoPromotionEnabled: false`
+
+Debes promover manualmente con:
+
+```bash
+kubectl argo rollouts promote landingpage -n <namespace>
+```
+
 ## Archivo principal para cambiar la landing
 
 - [site/index.html](/Users/juanmarulanda/Documents/POCArgoPull%20Request%20Generator/landing/site/index.html)
@@ -179,3 +251,4 @@ La configuracion actual ya construye imagenes multi-arquitectura:
 - la entrega hacia Argo CD ocurre por imagen OCI, no copiando `html` o `css` a `infra`
 - todo lo derivado por ambiente se publica en `infra/generated/...`
 - el repo `infra` se convierte en la unica fuente GitOps que Argo CD sincroniza
+- Argo Rollouts gobierna la promocion BlueGreen de las nuevas revisiones
