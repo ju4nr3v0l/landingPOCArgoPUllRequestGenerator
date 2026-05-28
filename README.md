@@ -75,6 +75,7 @@ Su responsabilidad es:
 
 - se ejecuta en cada `push` a `main`
 - construye la imagen de la landing
+- publica imagen multi-arquitectura (`linux/amd64` y `linux/arm64`)
 - renderiza `infra/generated/environments/prod/landing`
 - hace commit al repo `infra`
 - Argo CD sincroniza `landing-prod`
@@ -83,6 +84,7 @@ Su responsabilidad es:
 
 - se ejecuta en eventos de `pull_request`
 - si el PR tiene label `preview`, construye y publica una imagen del PR
+- la imagen del PR tambien se publica como multi-arquitectura (`linux/amd64` y `linux/arm64`)
 - si el PR tiene label `preview`, genera `infra/generated/previews/pr-<numero>`
 - si el PR se cierra o pierde el label `preview`, elimina esa carpeta
 - Argo CD crea o destruye el ambiente efimero en funcion del estado de Git

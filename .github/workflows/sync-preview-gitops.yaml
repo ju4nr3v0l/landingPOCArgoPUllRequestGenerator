@@ -59,6 +59,10 @@ jobs:
         if: steps.preview_meta.outputs.should_render == 'true'
         uses: docker/setup-buildx-action@v3
 
+      - name: Set up QEMU
+        if: steps.preview_meta.outputs.should_render == 'true'
+        uses: docker/setup-qemu-action@v3
+
       - name: Validate Docker Hub secrets
         if: steps.preview_meta.outputs.should_render == 'true'
         env:
@@ -86,6 +90,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ${{ env.IMAGE_REPOSITORY }}:${{ steps.preview_meta.outputs.preview_id }}-${{ github.event.pull_request.head.sha }}
